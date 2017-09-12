@@ -9,7 +9,7 @@
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
 #
-# Unless required by applicable law or agreed to in writing, software
+# Unless required by programlicable law or agreed to in writing, software
 # distributed under the License is distributed on an "AS IS" BASIS,
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
@@ -17,11 +17,12 @@
 
 resource_name :hashicorp_binary
 
-property :app, String, name_property: true
+property :program, String, name_property: true
 property :version, String, required: true
 property :dir, String, default: lazy { node['hashicorp_install']['bin_dir'] }
 property :baseurl, String, default: 'https://releases.hashicorp.com'
 property :public_key_content, String, default: lazy { node['hashicorp_install']['key'] }
+property :use_symlink, [TrueClass, FalseClass], default: true
 
 default_action :install
 
@@ -29,10 +30,7 @@ action :install do
   package 'unzip'
   package 'gnupg'
 
-  bin_dir = directory ::File.join(new_resource.dir, "#{new_resource.app}-#{new_resource.version}") do
-    owner 'root'
-    group node['root_group']
-    mode '0755'
+  bin_dir = directory unzip_dir do
     recursive true
   end
 
@@ -55,36 +53,37 @@ action :install do
     action :nothing
   end
 
-  checksum_filename = "#{new_resource.app}_#{new_resource.version}_SHA256SUMS"
+  checksum_filename = "#{new_resource.program}_#{new_resource.version}_SHA256SUMS"
 
   checksum_file = remote_file ::File.join(Chef::Config[:file_cache_path], checksum_filename) do
-    source ::URI.join(new_resource.baseurl, "#{new_resource.app}/#{new_resource.version}/#{checksum_filename}").to_s
+    source ::URI.join(new_resource.baseurl, "#{new_resource.program}/#{new_resource.version}/#{checksum_filename}").to_s
   end
 
   remote_file ::File.join(Chef::Config[:file_cache_path], "#{checksum_filename}.sig") do
-    source ::URI.join(new_resource.baseurl, "#{new_resource.app}/#{new_resource.version}/#{checksum_filename}.sig").to_s
+    source ::URI.join(new_resource.baseurl, "#{new_resource.program}/#{new_resource.version}/#{checksum_filename}.sig").to_s
   end
 
-  execute "#{new_resource.app}_#{new_resource.version}-verify-checksum-signature" do
+  execute "#{new_resource.program}_#{new_resource.version}-verify-checksum-signature" do
     command %(gpg --homedir #{gpg_home} --batch --verify #{checksum_filename}.sig #{checksum_filename})
     cwd Chef::Config[:file_cache_path]
     action :nothing
   end
 
   zip = remote_file ::File.join(Chef::Config[:file_cache_path], zip_filename) do
-    source ::URI.join(new_resource.baseurl, "#{new_resource.app}/#{new_resource.version}/#{zip_filename}").to_s
+    source ::URI.join(new_resource.baseurl, "#{new_resource.program}/#{new_resource.version}/#{zip_filename}").to_s
     checksum lazy { ::File.readlines(checksum_file.path).select { |line| line =~ /#{zip_filename}$/ }.first.split(' ').first }
-    notifies :run, "execute[#{new_resource.app}_#{new_resource.version}-verify-checksum-signature]", :before
+    notifies :run, "execute[#{new_resource.program}_#{new_resource.version}-verify-checksum-signature]", :before
   end
 
-  execute "unzip-#{new_resource.app}-#{new_resource.version}" do
-    command %(unzip #{zip.path} -d #{bin_dir.path})
+  execute "unzip-#{new_resource.program}-#{new_resource.version}" do
+    command %(unzip #{zip.path} -d #{unzip_dir})
     action :run
-    creates ::File.join(bin_dir.path, new_resource.app)
+    creates ::File.join(unzip_dir, new_resource.program)
   end
 
-  link ::File.join(new_resource.dir, new_resource.app) do
-    to ::File.join(bin_dir.path, new_resource.app)
+  link ::File.join(new_resource.dir, new_resource.program) do
+    to ::File.join(bin_dir.path, new_resource.program)
+    only_if { new_resource.use_symlink }
   end
 end
 
@@ -107,6 +106,14 @@ action_class do
       when /i\d86/ then '386'
       else node['kernel']['machine']
       end
-    "#{new_resource.app}_#{new_resource.version}_#{node['os']}_#{arch}.zip"
+    "#{new_resource.program}_#{new_resource.version}_#{node['os']}_#{arch}.zip"
+  end
+
+  def unzip_dir
+    if new_resource.use_symlink
+      ::File.join(new_resource.dir, "#{new_resource.program}-#{new_resource.version}")
+    else
+      new_resource.dir
+    end
   end
 end
